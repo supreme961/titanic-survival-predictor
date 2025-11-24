@@ -44,7 +44,7 @@ def process_user_input(input_data):
     df_user['IsAlone'] = (df_user['FamilySize'] == 1).astype(int)
 
     # Cabin features
-    df_user['Deck'] = df_user['Cabin'].str[0]
+    df_user['Deck'] = df_user['Cabin'].astype(str).str[0] # <<-- FIX: Added .astype(str)
     df_user['Deck'] = df_user['Deck'].fillna('Unknown')
     df_user['HasCabin'] = df_user['Cabin'].notna().astype(int)
 
