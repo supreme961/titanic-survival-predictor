@@ -3,20 +3,19 @@ import pandas as pd
 import numpy as np
 import joblib
 
-# 1. Load the pre-trained models and columns
+# ------------------------------------------------------
+# Load Models & Constants
+# ------------------------------------------------------
 best_logreg = joblib.load('best_logreg_model.pkl')
 best_rf = joblib.load('best_rf_model.pkl')
 model_columns = joblib.load('model_columns.pkl')
 
-# 2. Define constants for imputation and feature engineering
-AGE_MEDIAN = 28.0 # Global median from training data
-FARE_MEDIAN = 14.4542 # Global median from training data
-EMBARKED_MODE = 'S' # Global mode from training data
-
-FARE_BINS = [0.0, 7.9104, 14.4542, 31.0, 512.3292] # Adjusted based on qcut boundaries from training
+AGE_MEDIAN = 28.0
+FARE_MEDIAN = 14.4542
+EMBARKED_MODE = 'S'
+FARE_BINS = [0.0, 7.9104, 14.4542, 31.0, 512.3292]
 FARE_LABELS = ['Low', 'Medium', 'High', 'Very High']
 
-# Title mapping from feature_engineering function
 title_mapping = {
     'Mr': 'Mr', 'Miss': 'Miss', 'Mrs': 'Mrs', 'Master': 'Master',
     'Dr': 'Rare', 'Rev': 'Rare', 'Col': 'Rare', 'Major': 'Rare',
@@ -25,132 +24,172 @@ title_mapping = {
     'Jonkheer': 'Rare', 'Dona': 'Rare'
 }
 
+# ------------------------------------------------------
+# Processing Function
+# ------------------------------------------------------
 def process_user_input(input_data):
-    # Convert input_data dictionary to a DataFrame
     df_user = pd.DataFrame([input_data])
 
-    # Ensure column types are consistent with original df for processing
-    # For simplicity, PassengerId, Ticket are not used and Cabin is handled specially.
-    # Name is used only for title extraction.
-    df_user['Name'] = df_user['Name'].fillna('Mr. User') # Dummy name for title extraction if not provided
-    df_user['Cabin'] = df_user['Cabin'].replace('', np.nan) # Treat empty string as NaN for cabin
+    df_user['Name'] = df_user['Name'].fillna('Mr. User')
+    df_user['Cabin'] = df_user['Cabin'].replace('', np.nan)
 
-    # Extract Title
+    # Title extraction
     df_user['Title'] = df_user['Name'].str.extract(r' ([A-Za-z]+)\.', expand=False)
-    df_user['Title'] = df_user['Title'].map(title_mapping).fillna('Rare') # Handle unseen titles
+    df_user['Title'] = df_user['Title'].map(title_mapping).fillna('Rare')
 
-    # Family size features
+    # Family
     df_user['FamilySize'] = df_user['SibSp'] + df_user['Parch'] + 1
     df_user['IsAlone'] = (df_user['FamilySize'] == 1).astype(int)
 
     # Cabin features
-    df_user['Deck'] = df_user['Cabin'].astype(str).str[0] # <<-- FIX: Added .astype(str)
+    df_user['Deck'] = df_user['Cabin'].astype(str).str[0]
     df_user['Deck'] = df_user['Deck'].fillna('Unknown')
     df_user['HasCabin'] = df_user['Cabin'].notna().astype(int)
 
-    # Age - fill with global median
+    # Age / Fare groups
     df_user['Age'] = df_user['Age'].fillna(AGE_MEDIAN)
-    df_user['AgeGroup'] = pd.cut(df_user['Age'],
-                                 bins=[0, 12, 18, 35, 60, 100],
-                                 labels=['Child', 'Teen', 'Adult', 'Middle', 'Senior'],
-                                 right=True)
-    # Ensure 'AgeGroup' is categorical with all possible categories
-    age_group_categories = ['Child', 'Teen', 'Adult', 'Middle', 'Senior']
-    df_user['AgeGroup'] = pd.Categorical(df_user['AgeGroup'], categories=age_group_categories)
+    df_user['AgeGroup'] = pd.cut(
+        df_user['Age'], 
+        bins=[0, 12, 18, 35, 60, 100],
+        labels=['Child', 'Teen', 'Adult', 'Middle', 'Senior']
+    )
 
-    # Fare - fill with global median
     df_user['Fare'] = df_user['Fare'].fillna(FARE_MEDIAN)
-    df_user['FareGroup'] = pd.cut(df_user['Fare'],
-                                  bins=FARE_BINS,
-                                  labels=FARE_LABELS,
-                                  include_lowest=True)
-    # Ensure 'FareGroup' is categorical with all possible categories
-    fare_group_categories = ['Low', 'Medium', 'High', 'Very High']
-    df_user['FareGroup'] = pd.Categorical(df_user['FareGroup'], categories=fare_group_categories)
+    df_user['FareGroup'] = pd.cut(
+        df_user['Fare'],
+        bins=FARE_BINS,
+        labels=FARE_LABELS,
+        include_lowest=True
+    )
 
-    # Embarked - fill with mode
-    df_user['Embarked'] = df_user['Embarked'].fillna(EMBARKED_MODE)
-
-    # Select and drop columns to match the df_clean state from training
-    cols_to_keep = ['Pclass', 'Sex', 'Embarked', 'Title', 'FamilySize', 'IsAlone', 'HasCabin', 'AgeGroup', 'FareGroup']
+    cols_to_keep = ['Pclass', 'Sex', 'Embarked', 'Title',
+                    'FamilySize', 'IsAlone', 'HasCabin',
+                    'AgeGroup', 'FareGroup']
+    
     df_processed = df_user[cols_to_keep]
 
-    # One-hot encode categorical variables
+    # One-hot encode
     categorical_cols = ['Sex', 'Embarked', 'Title', 'AgeGroup', 'FareGroup']
     df_encoded = pd.get_dummies(df_processed, columns=categorical_cols, drop_first=True)
 
-    # Align columns with the training data's model_columns
-    # Add missing columns (which would be False/0 for this single instance)
+    # Align with training columns
     missing_cols = set(model_columns) - set(df_encoded.columns)
     for c in missing_cols:
-        df_encoded[c] = False # Use False for boolean dtypes from get_dummies
+        df_encoded[c] = 0
 
-    # Drop any extra columns that might have appeared (shouldn't happen if model_columns is comprehensive)
     extra_cols = set(df_encoded.columns) - set(model_columns)
     df_encoded = df_encoded.drop(columns=list(extra_cols))
 
-    # Reorder columns to match the training data
     df_final = df_encoded[model_columns]
 
     return df_final
 
-# Streamlit app layout
-st.title('Titanic Survival Predictor')
-st.write('Enter passenger details to predict survival probability.')
+# ------------------------------------------------------
+# Streamlit UI
+# ------------------------------------------------------
 
-# User input widgets
-st.sidebar.header('Passenger Details')
-pclass = st.sidebar.selectbox('Pclass', [1, 2, 3])
+st.set_page_config(
+    page_title="Titanic Survival Predictor",
+    page_icon="🚢",
+    layout="wide",
+)
+
+# Header
+st.markdown("""
+<style>
+.main-title {
+    font-size: 40px;
+    font-weight: bold;
+    text-align: center;
+    color: #003366;
+}
+.sub-text {
+    text-align: center;
+    font-size: 18px;
+    color: #444;
+}
+.card {
+    padding: 20px;
+    border-radius: 15px;
+    background-color: #f8f9fa;
+    box-shadow: 0px 0px 8px rgba(0,0,0,0.1);
+    margin-bottom: 20px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("<h1 class='main-title'>🚢 Titanic Survival Predictor</h1>", unsafe_allow_html=True)
+st.markdown("<p class='sub-text'>Enter passenger details to estimate the chance of surviving the Titanic disaster.</p>", unsafe_allow_html=True)
+
+# Sidebar
+st.sidebar.header("🧍 Passenger Details")
+st.sidebar.write("---")
+
+pclass = st.sidebar.selectbox('Passenger Class (Pclass)', [1, 2, 3])
 sex = st.sidebar.radio('Sex', ['male', 'female'])
-age = st.sidebar.slider('Age', 0, 80, 30)
-sibsp = st.sidebar.slider('SibSp (Siblings/Spouses)', 0, 8, 0)
-parch = st.sidebar.slider('Parch (Parents/Children)', 0, 6, 0)
-fare = st.sidebar.number_input('Fare', min_value=0.0, max_value=500.0, value=30.0)
-cabin = st.sidebar.text_input('Cabin (e.g., C23, leave blank if unknown)', '')
-embarked = st.sidebar.selectbox('Embarked', ['S', 'C', 'Q'])
+age = st.sidebar.slider('Age', 0, 80, 25)
+sibsp = st.sidebar.slider('Siblings/Spouses Aboard', 0, 8, 0)
+parch = st.sidebar.slider('Parents/Children Aboard', 0, 6, 0)
+fare = st.sidebar.number_input('Fare Paid', min_value=0.0, max_value=500.0, value=30.0)
+cabin = st.sidebar.text_input('Cabin (optional)', '')
+embarked = st.sidebar.selectbox('Embarked From', ['S', 'C', 'Q'])
 
-# Store user inputs in a dictionary
+# Input dict
 user_input = {
-    'PassengerId': 0, # Dummy for preprocessing, not used in model directly
+    'PassengerId': 0,
     'Pclass': pclass,
-    'Name': 'Mr. User' if sex == 'male' else 'Mrs. User', # Dummy name for title extraction
+    'Name': 'Mr. User' if sex == 'male' else 'Mrs. User',
     'Sex': sex,
     'Age': float(age),
     'SibSp': sibsp,
     'Parch': parch,
-    'Ticket': '0', # Dummy for preprocessing, not used in model directly
+    'Ticket': '0',
     'Fare': float(fare),
     'Cabin': cabin,
     'Embarked': embarked
 }
 
-if st.sidebar.button('Predict Survival'):
-    # Process user input
-    processed_input = process_user_input(user_input)
+st.write("")
 
-    st.subheader('Prediction Results')
+# ------------------------------------------------------
+# Predictions
+# ------------------------------------------------------
+if st.sidebar.button("🔮 Predict Survival"):
+    processed = process_user_input(user_input)
 
-    # Logistic Regression Prediction
-    logreg_prediction_proba = best_logreg.predict_proba(processed_input)
-    logreg_survived_proba = logreg_prediction_proba[0][1] # Probability of surviving
-    logreg_prediction = best_logreg.predict(processed_input)[0]
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.subheader("📊 Prediction Results")
 
-    st.write('### Logistic Regression Model')
-    if logreg_prediction == 1:
-        st.success(f'Prediction: \u2705 Survived (Probability: {logreg_survived_proba:.2f})')
-    else:
-        st.error(f'Prediction: \u274C Not Survived (Probability: {1-logreg_survived_proba:.2f})')
+    # Logistic Regression
+    log_proba = best_logreg.predict_proba(processed)[0][1]
+    log_pred = best_logreg.predict(processed)[0]
 
-    # Random Forest Prediction
-    rf_prediction_proba = best_rf.predict_proba(processed_input)
-    rf_survived_proba = rf_prediction_proba[0][1] # Probability of surviving
-    rf_prediction = best_rf.predict(processed_input)[0]
+    # Random Forest
+    rf_proba = best_rf.predict_proba(processed)[0][1]
+    rf_pred = best_rf.predict(processed)[0]
 
-    st.write('### Random Forest Model')
-    if rf_prediction == 1:
-        st.success(f'Prediction: \u2705 Survived (Probability: {rf_survived_proba:.2f})')
-    else:
-        st.error(f'Prediction: \u274C Not Survived (Probability: {1-rf_survived_proba:.2f})')
+    col1, col2 = st.columns(2)
 
-    st.subheader('Raw Processed Input (for debugging)')
-    st.write(processed_input)
+    with col1:
+        st.markdown("### ⚖️ Logistic Regression")
+        st.metric(
+            label="Survival Probability",
+            value=f"{log_proba*100:.1f}%",
+            delta="Survived" if log_pred==1 else "Not Survived"
+        )
+
+    with col2:
+        st.markdown("### 🌲 Random Forest")
+        st.metric(
+            label="Survival Probability",
+            value=f"{rf_proba*100:.1f}%",
+            delta="Survived" if rf_pred==1 else "Not Survived"
+        )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    with st.expander("🔧 Show Processed Model Input"):
+        st.write(processed)
+
+else:
+    st.info("Click **Predict Survival** from the sidebar to get results.")
